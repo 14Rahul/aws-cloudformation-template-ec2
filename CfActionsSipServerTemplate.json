@@ -1,0 +1,146 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "AWS CloudFormation Template to deploy a ProNotes server for a new tenant",
+  "Parameters": {
+    "TenantName": { "Description": "Name of the tenant", "Type": "String" },
+    "KeyName": {
+      "Description": "Name of an existing EC2 KeyPair to enable SSH access to the instance",
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "ConstraintDescription": "must be the name of an existing EC2 KeyPair."
+    },
+    "InstanceType": {
+      "Description": "ProNotes EC2 instance type",
+      "Type": "String",
+      "Default": "t3.medium",
+      "AllowedValues": ["t3.small", "t3.medium", "t3.large"],
+      "ConstraintDescription": "must be a valid EC2 instance type."
+    },
+    "SubnetId": {
+      "Description": "The ID of the subnet in which the instance is to be deployed.",
+      "Type": "String"
+    }
+  },
+  "Mappings": {
+    "AWSRegion2AMI": { "us-east-2": { "HVM64": "ami-0d9511fcd618ea266" } }
+  },
+  "Resources": {
+    "InstanceSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Default SG for ProNotes Tenant",
+        "GroupName": {
+          "Fn::Join": ["-", ["OhSgEcActionsSipServer", { "Ref": "TenantName" }]]
+        },
+        "VpcId": "vpc-4645182e"
+      }
+    },
+    "Ec2Instance": {
+      "Type": "AWS::EC2::Instance",
+      "Properties": {
+        "InstanceType": { "Ref": "InstanceType" },
+        "KeyName": { "Ref": "KeyName" },
+        "PropagateTagsToVolumeOnCreation": "true",
+        "IamInstanceProfile": "OhRoleEcActionSipServer",
+        "BlockDeviceMappings": [
+          {
+            "DeviceName": "/dev/sda1",
+            "Ebs": {
+              "VolumeType": "gp3",
+              "DeleteOnTermination": "true",
+              "VolumeSize": "100"
+            }
+          }
+        ],
+        "UserData": { "Fn::Base64": { "Fn::Join": ["", [
+          "#!/bin/bash -xe\n",
+          "sudo apt-get update\n",
+          "sudo apt-get -y upgrade\n",
+          "sudo apt-get -y install sssd realmd samba-common packagekit adcli\n",
+          "export DEBIAN_FRONTEND=noninteractive \n",
+          "sudo -E apt-get -y -qq install krb5-user\n",
+          "sed -i 's/default_realm = .*/default_realm = ldap.internal.aws.prodigaltech.com/' /etc/krb5.conf\n",
+          "sed -i '/default_realm /a \\ \\ \\ \\ \\ \\ \\ \\ rdns = false' /etc/krb5.conf\n",
+          "echo naqpiqqudpor5penHi | realm join -U admin ldap.internal.aws.prodigaltech.com --verbose\n",
+          "realm deny --all\n",
+          "realm permit --groups 'Devops' 'Platform' 'Techops' 'Apps' 'Analytics'\n",
+          "sudo pam-auth-update --enable mkhomedir\n"
+        ]]}},
+        "NetworkInterfaces": [
+          {
+            "GroupSet": [{ "Ref": "InstanceSecurityGroup" },  "sg-0427da30d0f1c60e0" ],
+            "AssociatePublicIpAddress": "false",
+            "DeviceIndex": "0",
+            "DeleteOnTermination": "true",
+            "SubnetId": { "Ref": "SubnetId" }
+          }
+        ],
+        "ImageId": {
+          "Fn::FindInMap": ["AWSRegion2AMI", { "Ref": "AWS::Region" }, "HVM64"]
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Join": [
+                "-",
+                ["OhEcActionsSipServer", { "Ref": "TenantName" }]
+              ]
+            }
+          },
+          { "Key": "ManagedByBot", "Value": "True" },
+          { "Key": "product-line", "Value": "ProNotes" },
+          { "Key": "Application", "Value": "PN" },
+          { "Key": "Team", "Value": "Apps" },
+          { "Key": "Stage", "Value": "Prod" },
+          { "Key": "ModeOfOperation", "Value": "Manual" },
+          { "Key": "IsTagged", "Value": "True" },
+          { "Key": "AutoAlarm", "Value": "True" },
+          { "Key": "Tenancy", "Value": "On-demand" },
+          { "Key": "OptimisationScope", "Value": "No" }
+        ]
+      },
+      "DependsOn" : "InstanceSecurityGroup"
+    },
+    "IPAddress": {
+      "Type": "AWS::EC2::EIP",
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Join": [
+                "-",
+                ["OhEipActionsSipServer", { "Ref": "TenantName" }]
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "IPAssoc": {
+      "Type": "AWS::EC2::EIPAssociation",
+      "Properties": {
+        "InstanceId": { "Ref": "Ec2Instance" },
+        "EIP": { "Ref": "IPAddress" }
+      }
+    }
+  },
+  "Outputs": {
+    "InstanceId": {
+      "Description": "InstanceId of the newly created EC2 instance",
+      "Value": { "Ref": "Ec2Instance" }
+    },
+    "AZ": {
+      "Description": "Availability Zone of the newly created EC2 instance",
+      "Value": { "Fn::GetAtt": ["Ec2Instance", "AvailabilityZone"] }
+    },
+    "PublicDNS": {
+      "Description": "Public DNSName of the newly created EC2 instance",
+      "Value": { "Fn::GetAtt": ["Ec2Instance", "PublicDnsName"] }
+    },
+    "PublicIP": {
+      "Description": "Public IP address of the newly created EC2 instance",
+      "Value": { "Fn::GetAtt": ["Ec2Instance", "PublicIp"] }
+    }
+  }
+}
